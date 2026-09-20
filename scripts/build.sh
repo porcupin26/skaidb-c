@@ -10,7 +10,9 @@
 # (SKAIDB_FEATURES=kerberos), the MIT krb5 development headers.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
-dist=$(realpath -m "${1:-$here/dist}")
+dist="${1:-$here/dist}"
+mkdir -p "$dist"
+dist=$(cd "$dist" && pwd)   # absolute, portably (macOS realpath has no -m)
 version=$(tr -d '[:space:]' < "$here/SKAIDB_VERSION")
 src="${SKAIDB_RUST_SRC:-$here/.skaidb-rust}"
 if [ ! -d "$src/.git" ]; then
