@@ -29,12 +29,12 @@ jobs:
             -DCMAKE_C_FLAGS="-Wall -Wextra -Werror" -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
           cmake --build build
       - name: Start a skaidb server of the same version
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ver=$(tr -d '[:space:]' < SKAIDB_VERSION)
-          gh release download "v$ver" --repo porcupin26/skaidb -p "skaidb-$ver-linux-x86_64.tar.gz" -O server.tgz
+          # Server builds are published at repo.dsys.org (see the skaidb
+          # INSTALL guide); the tarball unpacks to skaidb-<ver>/skaidb.
+          curl -fsSL "https://repo.dsys.org/dl/skaidb/$ver/skaidb-$ver-linux-x86_64.tar.gz" -o server.tgz
           mkdir -p server && tar xzf server.tgz -C server --strip-components=1
           mkdir -p "$RUNNER_TEMP/skaidb-data"
           cat > "$RUNNER_TEMP/skaidb.toml" <<CFG
