@@ -1,0 +1,97 @@
+# Release: a pushed tag vX.Y.Z (equal to SKAIDB_VERSION) builds libskaidb
+# from the skaidb-rust tag of the same version on three targets and attaches
+# libskaidb-<version>-<target>.tar.gz archives (include/, lib/, CMake package
+# config, LICENSE, README) plus SHA256SUMS to the GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release, e.g. v0.294.2'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Tag matches SKAIDB_VERSION
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          ver=$(tr -d '[:space:]' < SKAIDB_VERSION)
+          [ "$tag" = "v$ver" ] || { echo "::error::tag $tag does not match SKAIDB_VERSION $ver"; exit 1; }
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build libskaidb
+        run: scripts/build.sh "$PWD/dist"
+      - name: Archive
+        run: |
+          set -euo pipefail
+          name="libskaidb-$VERSION-${{ matrix.target }}"
+          mkdir -p "stage/$name/lib/cmake/skaidb"
+          cp -r dist/include "stage/$name/"
+          cp dist/lib/libskaidb.* "stage/$name/lib/"
+          cp cmake/skaidbConfig.cmake "stage/$name/lib/cmake/skaidb/"
+          cp LICENSE README.md dist/VERSION "stage/$name/"
+          tar czf "$name.tar.gz" -C stage "$name"
+          ls -la "$name.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: libskaidb-*.tar.gz
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          (cd archives && sha256sum libskaidb-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          {
+            awk -v v="${tag#v}" '
+              $0 ~ "^## \\[?" v { on=1; next }
+              on && /^## / { exit }
+              on { print }
+            ' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+            echo
+            echo "Prebuilt \`libskaidb\` for the targets below: unpack, then build against \`include/\` and \`lib/libskaidb.a\` (\`-lpthread -ldl -lm\`) or \`find_package(skaidb)\` with \`CMAKE_PREFIX_PATH\` at the unpacked tree. Built from skaidb-rust tag \`$tag\`."
+          } > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: notes.md
+          files: |
+            archives/libskaidb-*.tar.gz
+            archives/SHA256SUMS

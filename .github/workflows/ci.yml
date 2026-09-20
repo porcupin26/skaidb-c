@@ -1,0 +1,71 @@
+# CI: build libskaidb from the pinned skaidb-rust tag, compile the examples
+# and the smoke tests with -Wall -Wextra -Werror through CMake, then run the
+# tests against the matching skaidb server release.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .skaidb-rust
+      - name: Build libskaidb from the pinned tag
+        run: scripts/build.sh "$PWD/dist"
+      - name: Configure and build (examples + tests, warnings are errors)
+        run: |
+          cmake -S . -B build -DSKAIDB_PREBUILT="$PWD/dist" \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -Werror" -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
+          cmake --build build
+      - name: Start a skaidb server of the same version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver=$(tr -d '[:space:]' < SKAIDB_VERSION)
+          gh release download "v$ver" --repo porcupin26/skaidb -p "skaidb-$ver-linux-x86_64.tar.gz" -O server.tgz
+          mkdir -p server && tar xzf server.tgz -C server --strip-components=1
+          mkdir -p "$RUNNER_TEMP/skaidb-data"
+          cat > "$RUNNER_TEMP/skaidb.toml" <<CFG
+          [server]
+          bind_addr = "127.0.0.1"
+          quic_port = 7000
+          rest_port = 7080
+          data_dir = "$RUNNER_TEMP/skaidb-data"
+          [cluster]
+          internode_port = 7100
+          [auth]
+          superuser = "ci"
+          superuser_password = "ci-password"
+          [observability]
+          prometheus_port = 9090
+          [mqtt]
+          enabled = false
+          CFG
+          nohup server/skaidb --config "$RUNNER_TEMP/skaidb.toml" > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 1 100); do
+            if (exec 3<>/dev/tcp/127.0.0.1/7000) 2>/dev/null; then exit 0; fi
+            sleep 0.3
+          done
+          echo "server did not come up"; cat "$RUNNER_TEMP/server.log"; exit 1
+      - name: Smoke tests (C and C++)
+        env:
+          SKAIDB_ENDPOINT: 127.0.0.1:7000
+          SKAIDB_USER: ci
+          SKAIDB_PASSWORD: ci-password
+        run: ctest --test-dir build --output-on-failure
+      - name: Examples run end to end
+        run: |
+          build/basic_usage_c 127.0.0.1:7000 ci ci-password
+          build/basic_usage_cpp 127.0.0.1:7000 ci ci-password
