@@ -16,7 +16,14 @@ dist=$(cd "$dist" && pwd)   # absolute, portably (macOS realpath has no -m)
 version=$(tr -d '[:space:]' < "$here/SKAIDB_VERSION")
 src="${SKAIDB_RUST_SRC:-$here/.skaidb-rust}"
 if [ ! -d "$src/.git" ]; then
-  git clone -q --depth 1 --branch "v$version" https://github.com/porcupin26/skaidb-rust "$src"
+  # Initialised in place rather than cloned: a CI cache (rust-cache keeps
+  # `$src/target`) can restore the directory before its first checkout,
+  # and `git clone` refuses a non-empty destination.
+  mkdir -p "$src"
+  git -C "$src" init -q
+  git -C "$src" remote add origin https://github.com/porcupin26/skaidb-rust
+  git -C "$src" fetch -q --depth 1 origin "refs/tags/v$version:refs/tags/v$version"
+  git -C "$src" checkout -q "v$version"
 else
   git -C "$src" fetch -q --depth 1 origin "refs/tags/v$version:refs/tags/v$version" && git -C "$src" checkout -q "v$version"
 fi
